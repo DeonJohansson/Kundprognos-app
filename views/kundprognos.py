@@ -89,6 +89,17 @@ def fetch_overrides():
     return st.session_state["ovr"]
 
 
+COLSET_FILE = "kundprognos_settings.json"
+FIXED_COLS = ["Kundnamn"]          # visas alltid
+
+
+def fetch_colsettings():
+    if "colset" not in st.session_state:
+        raw, sha = gh_get(COLSET_FILE)
+        st.session_state["colset"] = (json.loads(raw) if raw else {}, sha)
+    return st.session_state["colset"]
+
+
 # ---------------------------------------------------------------- data
 def goal_of(r):
     return r["tg"] if r.get("tg") is not None else (r.get("mal") or 0) + (r.get("inc") or 0)
@@ -308,15 +319,46 @@ with tab1:
     k[3].metric("Kvar till mål", kr(max(0, goal - tot)))
     k[4].metric("2025 Försäljning", kr(view["2025 Försäljning"].fillna(0).sum()))
 
-    edit = st.toggle("✏️ Redigera Säljare, 2026 Mål, Possible Increase och Total 2026 Goal", key="edit_mode")
+    # ---- kolumnval: standard sparas i datarepot, var och en kan ändra för sig själv
+    colset, colset_sha = fetch_colsettings()
+    all_cols = list(view.columns)
+    saved_default = [c for c in colset.get("default_columns", []) if c in all_cols] or all_cols
+    if "kp_cols" not in st.session_state:
+        st.session_state["kp_cols"] = [c for c in saved_default if c not in FIXED_COLS]
+    bar = st.columns([3, 1.2])
+    edit = bar[0].toggle("✏️ Redigera Säljare, 2026 Mål, Possible Increase och Total 2026 Goal", key="edit_mode")
+    with bar[1].popover(f"Kolumner ({len(st.session_state['kp_cols']) + len(FIXED_COLS)} av {len(all_cols)})",
+                        width="stretch"):
+        st.multiselect("Visa kolumner", [c for c in all_cols if c not in FIXED_COLS], key="kp_cols",
+                       help="Kundnamn visas alltid. Valet gäller direkt för dig.")
+        b1, b2 = st.columns(2)
+        if b1.button("Visa alla", width="stretch"):
+            st.session_state["kp_cols"] = [c for c in all_cols if c not in FIXED_COLS]
+            st.rerun()
+        if b2.button("Återställ standard", width="stretch"):
+            st.session_state["kp_cols"] = [c for c in saved_default if c not in FIXED_COLS]
+            st.rerun()
+        st.divider()
+        st.caption("Spara de valda kolumnerna som standard. Alla som öppnar rapporten ser då dessa kolumner.")
+        if st.button("Spara som standard för alla", type="primary", width="stretch"):
+            chosen = FIXED_COLS + [c for c in all_cols if c in st.session_state["kp_cols"]]
+            ok, err = gh_put(COLSET_FILE, json.dumps({**colset, "default_columns": chosen}, ensure_ascii=False, indent=1),
+                             colset_sha, f"Standardkolumner i kundprognosen: {len(chosen)} kolumner")
+            st.session_state.pop("colset", None)
+            st.session_state["flash"] = (ok, "Standardkolumnerna är sparade." if ok else err)
+            st.rerun()
+    shown_cols = FIXED_COLS + [c for c in all_cols if c in st.session_state["kp_cols"]]
+    if edit:
+        shown_cols += [c for c in EDIT_FIELDS if c not in shown_cols]   # redigerbara kolumner måste synas
+
     cfg = colcfg(view.columns)
     if not edit:
-        st.dataframe(view, column_config=cfg, hide_index=True, width="stretch", height=560)
+        st.dataframe(view, column_config=cfg, column_order=shown_cols, hide_index=True, width="stretch", height=560)
     else:
         st.caption("Klicka i en cell för att ändra. **Total 2026 Goal** räknas om automatiskt som Mål + "
                    "Possible Increase, om du inte skriver in en egen total. Ändringarna sparas först när du "
                    "klickar på **Spara ändringar**.")
-        edited = st.data_editor(view, column_config=cfg, hide_index=True, width="stretch", height=560,
+        edited = st.data_editor(view, column_config=cfg, column_order=shown_cols, hide_index=True, width="stretch", height=560,
                                 disabled=[c for c in view.columns if c not in EDIT_FIELDS], key="editor")
         # räkna om Total för rader där bara Mål/Increase ändrats
         auto = edited["2026 Mål"].fillna(0) + edited["Possible Increase"].fillna(0)
@@ -338,11 +380,11 @@ with tab1:
             if ok:
                 st.session_state.pop("editor", None)
             st.rerun()
-    st.dataframe(totals_row(view, True), column_config=cfg, hide_index=True, width="stretch")
+    st.dataframe(totals_row(view, True), column_config=cfg, column_order=shown_cols, hide_index=True, width="stretch")
     if meta.get("unmatchedCount"):
         with st.expander(f"{meta['unmatchedCount']} kunder är inte kopplade till Fortnox (visar Excel-siffror)"):
             st.write(", ".join(meta.get("unmatched", [])))
-    st.download_button("Ladda ner som Excel", excel_bytes(view, "Kunder 2026"), "Kundprognos_2026.xlsx",
+    st.download_button("Ladda ner som Excel", excel_bytes(view[shown_cols], "Kunder 2026"), "Kundprognos_2026.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 with tab2:
