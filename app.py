@@ -203,8 +203,11 @@ def filters(df, key, with_dims):
             if sel:
                 out = out[out[name].isin(sel)]
     if q:
-        hay = out.select_dtypes(include="object").astype(str).agg(" ".join, axis=1).str.lower()
-        out = out[hay.str.contains(q.lower(), regex=False)]
+        text_cols = [c for c in ("Kundnamn", "Län", "Industry", "Säljare", "Noteringar", "Fortnox kundnr") if c in out.columns]
+        hay = pd.Series("", index=out.index, dtype="object")
+        for c in text_cols:
+            hay = hay + " " + out[c].fillna("").astype(str).str.lower()
+        out = out[hay.str.contains(q.strip().lower(), regex=False).to_numpy(dtype=bool)]
     return out
 
 
@@ -332,12 +335,12 @@ with tab1:
     edit = st.toggle("✏️ Redigera Säljare, 2026 Mål, Possible Increase och Total 2026 Goal", key="edit_mode")
     cfg = colcfg(view.columns)
     if not edit:
-        st.dataframe(view, column_config=cfg, hide_index=True, use_container_width=True, height=560)
+        st.dataframe(view, column_config=cfg, hide_index=True, width="stretch", height=560)
     else:
         st.caption("Klicka i en cell för att ändra. **Total 2026 Goal** räknas om automatiskt som Mål + "
                    "Possible Increase, om du inte skriver in en egen total. Ändringarna sparas först när du "
                    "klickar på **Spara ändringar**.")
-        edited = st.data_editor(view, column_config=cfg, hide_index=True, use_container_width=True, height=560,
+        edited = st.data_editor(view, column_config=cfg, hide_index=True, width="stretch", height=560,
                                 disabled=[c for c in view.columns if c not in EDIT_FIELDS], key="editor")
         # räkna om Total för rader där bara Mål/Increase ändrats
         auto = edited["2026 Mål"].fillna(0) + edited["Possible Increase"].fillna(0)
@@ -353,13 +356,13 @@ with tab1:
         who = cc[0].text_input("Ditt namn (visas i ändringsloggen)", key="who",
                                placeholder="t.ex. Deon")
         cc[1].markdown(f"<div style='padding-top:2rem'>{n_changed} rad(er) ändrade</div>", unsafe_allow_html=True)
-        if cc[2].button("Spara ändringar", type="primary", disabled=n_changed == 0, use_container_width=True):
+        if cc[2].button("Spara ändringar", type="primary", disabled=n_changed == 0, width="stretch"):
             ok, text = save_edits(view, edited, who.strip())
             st.session_state["flash"] = (ok, text)
             if ok:
                 st.session_state.pop("editor", None)
             st.rerun()
-    st.dataframe(totals_row(view, True), column_config=cfg, hide_index=True, use_container_width=True)
+    st.dataframe(totals_row(view, True), column_config=cfg, hide_index=True, width="stretch")
     if meta.get("unmatchedCount"):
         with st.expander(f"{meta['unmatchedCount']} kunder är inte kopplade till Fortnox (visar Excel-siffror)"):
             st.write(", ".join(meta.get("unmatched", [])))
@@ -374,8 +377,8 @@ with tab2:
     k[2].metric("Med försäljning", int((view2["TOTAL"] > 0).sum()))
     cfg2 = colcfg(view2.columns)
     st.dataframe(view2.sort_values("TOTAL", ascending=False), column_config=cfg2, hide_index=True,
-                 use_container_width=True, height=560)
-    st.dataframe(totals_row(view2, False), column_config=cfg2, hide_index=True, use_container_width=True)
+                 width="stretch", height=560)
+    st.dataframe(totals_row(view2, False), column_config=cfg2, hide_index=True, width="stretch")
     st.download_button("Ladda ner som Excel", excel_bytes(view2, "Nya kunder"), "Nya_kunder_2026.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -390,4 +393,4 @@ with tab3:
             "Av": x.get("by"), "Kund": x.get("kund"), "Fält": names.get(x.get("falt"), x.get("falt")),
             "Från": fmt_val(x.get("fran")),
             "Till": "(Mål + Increase)" if x.get("till") is None and x.get("falt") == "tg" else fmt_val(x.get("till")),
-        } for x in log]), hide_index=True, use_container_width=True)
+        } for x in log]), hide_index=True, width="stretch")
