@@ -1,0 +1,11 @@
+{
+  "kategori": {
+    "falt": "Manufacturer",
+    "regex": null,
+    "mappning": {},
+    "saknas": "Okategoriserad"
+  },
+  "ar_bakat": 3,
+  "exkludera_artiklar": [],
+  "foretagsnamn": ""
+}

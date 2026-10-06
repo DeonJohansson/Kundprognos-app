@@ -1,4 +1,6 @@
 streamlit>=1.47
 pandas
+numpy
 openpyxl
 requests
+psycopg[binary]>=3.1
