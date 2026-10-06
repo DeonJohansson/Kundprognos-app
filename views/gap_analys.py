@@ -124,6 +124,17 @@ def short(v):
     return f"{v:.0f} kr"
 
 
+def kr(v):
+    """Belopp i hela kronor: 1 234 567 kr. Noll/saknas visas som –."""
+    if v is None or (isinstance(v, float) and np.isnan(v)) or round(v) == 0:
+        return "–"
+    return f"{v:,.0f} kr".replace(",", "\u00a0")
+
+
+def pct_txt(v):
+    return "" if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v:+.0f} %"
+
+
 def pct(a, b):
     return round((a - b) / b * 100) if b > 0 else None
 
@@ -211,7 +222,7 @@ with t1:
     chg = [pct(a, b) for a, b in zip(sub["Totalt"], sub["Föregående år"])]
     table = pd.concat([pd.DataFrame({
         "Kundnr": sub["Kundnr"].astype(str), "Kund": sub["Kund"], "Ort": sub["Ort"],
-        f"Totalt {yr}": sub["Totalt"].round(0), "Förändring %": chg, "Gap": sub["Gap"]}), mat.round(0)], axis=1)
+        f"Totalt {yr}": sub["Totalt"].round(0).astype("int64"), "Förändring %": chg, "Gap": sub["Gap"]}), mat.round(0).astype("int64")], axis=1)
     if len(table) > 1500:
         st.info(f"Visar de 1 500 största av {len(table)} kunder – använd sök eller urval för att hitta fler, "
                 "eller ladda ner hela tabellen som Excel.")
@@ -219,9 +230,9 @@ with t1:
     colors = pd.DataFrame("", index=shown.index, columns=shown.columns)
     for c in CATS:
         colors[c] = sts[c].head(1500).map(FILL)
-    styler = shown.style.apply(lambda _: colors, axis=None).format(
-        {c: (lambda v: "–" if not v else f"{v:,.0f}".replace(",", " ")) for c in [f"Totalt {yr}", *CATS]}
-    ).format({"Förändring %": lambda v: "" if v is None or pd.isna(v) else f"{v:+.0f} %"})
+    fmt = {c: kr for c in [f"Totalt {yr}", *CATS]}
+    fmt["Förändring %"] = pct_txt
+    styler = shown.style.apply(lambda _: colors, axis=None).format(fmt)
     cfg = {"Kund": st.column_config.TextColumn("Kund", width="large", pinned=True),
            "Kundnr": st.column_config.TextColumn("Kundnr", width="small", pinned=True)}
     st.dataframe(styler, hide_index=True, width="stretch", height=600, column_config=cfg)
@@ -254,7 +265,7 @@ with t2:
         gs = g.head(5000)
         gst = gs.style.apply(lambda col: col.map({"Tappad": FILL["lost"], "Minskar": FILL["down"],
                                                   "Aldrig köpt": FILL["never"]}).fillna(""), subset=["Status"]).format(
-            {c: (lambda v: "–" if not v else f"{v:,.0f}".replace(",", " ")) for c in [str(yr), str(yr - 1), "Snitt tidigare år", "Bästa år"]})
+            {c: kr for c in [str(yr), str(yr - 1), "Snitt tidigare år", "Bästa år"]})
         st.dataframe(gst, hide_index=True, width="stretch", height=600,
                      column_config={"Kund": st.column_config.TextColumn("Kund", width="large", pinned=True)})
         st.download_button("Ladda ner gap-listan som Excel", excel_bytes(g, f"Gap {yr}"), f"GAP-lista-{yr}.xlsx", key="dl_gap")
@@ -272,9 +283,7 @@ with t3:
                      "Tappade kunder": int((ST[idx, kk] == "lost").sum()),
                      "Aldrig köpt": int((ST[idx, kk] == "never").sum())})
     cdf = pd.DataFrame(crow).sort_values(f"Försäljning {yr}", ascending=False)
-    cst = cdf.style.format({f"Försäljning {yr}": lambda v: f"{v:,.0f}".replace(",", " "),
-                            f"Försäljning {yr - 1}": lambda v: f"{v:,.0f}".replace(",", " "),
-                            "Förändring %": lambda v: "" if v is None or pd.isna(v) else f"{v:+.0f} %",
+    cst = cdf.style.format({f"Försäljning {yr}": kr, f"Försäljning {yr - 1}": kr, "Förändring %": pct_txt,
                             "Penetration %": lambda v: f"{v:.0f} %"}).apply(
         lambda col: ["color:#1e7a46" if (v is not None and not pd.isna(v) and v >= 0) else "color:#b3261e" for v in col],
         subset=["Förändring %"])
