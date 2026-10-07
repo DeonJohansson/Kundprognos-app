@@ -34,35 +34,60 @@ def db_conn():
     return fc.DB(autocommit=True)
 
 
-def db():
-    con = db_conn()
-    try:
-        con.execute("SELECT 1").fetchone()
-    except Exception:
+def _db_error(e):
+    import re as _re
+    msg = _re.sub(r"postgres(ql)?://\S+", "postgresql://…", str(e)).strip().splitlines()
+    msg = msg[0] if msg else type(e).__name__
+    st.title("GAP-analys")
+    st.error("**GAP-analysen når inte sin databas (Neon) just nu.** Övriga sidor fungerar som vanligt.")
+    low = msg.lower()
+    if "quota" in low or "compute time" in low or "exceeded" in low:
+        st.info("Neon säger att databasens gratiskvot är slut för månaden. Logga in på console.neon.tech och "
+                "kontrollera **Usage** – kvoten nollställs vid månadsskiftet, eller uppgradera planen.")
+    elif "password" in low or "authentication" in low:
+        st.info("Neon nekade inloggningen. Kontrollera att `DATABASE_URL` under `[gap]` i appens Secrets "
+                "är samma som connection string i Neon (lösenordet kan ha bytts).")
+    elif "timeout" in low or "timed out" in low or "could not connect" in low or "connection" in low:
+        st.info("Databasen svarade inte i tid. Neon väcker databasen vid första besöket efter en paus – "
+                "vänta en halv minut och klicka **Försök igen**.")
+    st.caption(f"Tekniskt felmeddelande: {msg}")
+    if st.button("Försök igen", type="primary"):
         db_conn.clear()
+        st.rerun()
+    st.stop()
+
+
+def db():
+    try:
         con = db_conn()
-    return con
+        try:
+            con.execute("SELECT 1").fetchone()
+        except Exception:
+            db_conn.clear()
+            con = db_conn()
+        return con
+    except Exception as e:
+        db_conn.clear()
+        _db_error(e)
 
 
 D = db()
 
 
-@st.cache_resource
-def worker():
-    """Synkar mot Fortnox var 15:e minut så länge appen är vaken."""
-    wake = threading.Event()
+def start_sync_if_stale():
+    """Startar en bakgrundssynk mot Fortnox när någon öppnar sidan och datan är äldre än en timme.
+    Ingen ständig loop – då kan Neon-databasen somna mellan besöken och sparar kvot."""
+    if st.session_state.get("gap_sync_started"):
+        return
+    st.session_state["gap_sync_started"] = True
 
-    def loop():
-        while True:
-            try:
-                fc.sync_if_stale(15)
-            except Exception as e:
-                print("GAP-synkfel:", e, flush=True)
-            wake.wait(300)
-            wake.clear()
+    def run():
+        try:
+            fc.sync_if_stale(60)
+        except Exception as e:
+            print("GAP-synkfel:", e, flush=True)
 
-    threading.Thread(target=loop, daemon=True).start()
-    return wake
+    threading.Thread(target=run, daemon=True).start()
 
 
 @st.cache_data(ttl=60, show_spinner="Hämtar GAP-data …")
@@ -76,7 +101,7 @@ if not (s["client_id"] and s["client_secret"] and s["tenant_id"]):
     st.warning("Fortnox-kopplingen för GAP-analysen saknas. Lägg in `FORTNOX_CLIENT_ID` och "
                "`FORTNOX_CLIENT_SECRET` från den gamla GAP-appen under **Settings → Secrets**.")
     st.stop()
-WAKE = worker()
+start_sync_if_stale()
 ds = load_ds()
 if not ds:
     st.title("GAP-analys")
