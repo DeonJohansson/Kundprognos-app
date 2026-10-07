@@ -239,32 +239,38 @@ with t1:
     st.download_button("Ladda ner matrisen som Excel", excel_bytes(table, f"Matris {yr}"),
                        f"GAP-matris-{yr}.xlsx", key="dl_mat")
 
-    # ---- artiklar utan kategori
+    # ---- artiklar per kategori (Excel)
+    @st.cache_data(show_spinner=False)
+    def articles_in_category(generated, k_idx, _ds):
+        idxs = {i for i, a in enumerate(_ds.get("articles", [])) if a[3] == k_idx}
+        per_year, buyers = {}, {}
+        for c, a, y, f_, t_ in _ds.get("artCells", []):
+            if a in idxs:
+                per_year.setdefault(a, [0.0] * len(_ds["years"]))[y] += f_
+                buyers.setdefault(a, set()).add(c)
+        recs = []
+        for i in sorted(idxs):
+            a = _ds["articles"][i]
+            rec = {"Artikelnummer": str(a[0]), "Benämning": a[1], "EAN": a[2], "Kategori": _ds["categories"][k_idx]}
+            for y_i, y in enumerate(_ds["years"]):
+                rec[f"Försäljning {y} (kr)"] = round(per_year.get(i, [0.0] * len(_ds["years"]))[y_i])
+            rec["Antal kunder"] = len(buyers.get(i, ()))
+            recs.append(rec)
+        df = pd.DataFrame(recs)
+        return df.sort_values(f"Försäljning {_ds['years'][-1]} (kr)", ascending=False) if len(df) else df
+
+    st.markdown("**Artiklar i en kategori**")
     missing = fc.load_settings(D)["kategori"].get("saknas", "Okategoriserad")
-    if missing in CATS:
-        k_missing = CATS.index(missing)
-        art_rows = [a for a in ds.get("articles", []) if a[3] == k_missing]
-        if art_rows:
-            ai_set = {i for i, a in enumerate(ds["articles"]) if a[3] == k_missing}
-            per_year = {}
-            buyers = {}
-            for c, a, y, f_, t_ in ds.get("artCells", []):
-                if a in ai_set:
-                    per_year.setdefault(a, [0.0] * len(YEARS))[y] += f_
-                    buyers.setdefault(a, set()).add(c)
-            recs = []
-            for i, a in enumerate(ds["articles"]):
-                if i not in ai_set:
-                    continue
-                rec = {"Artikelnummer": str(a[0]), "Benämning": a[1], "EAN": a[2]}
-                for y_i, y in enumerate(YEARS):
-                    rec[f"Försäljning {y} (kr)"] = round(per_year.get(i, [0.0] * len(YEARS))[y_i])
-                rec["Antal kunder"] = len(buyers.get(i, ()))
-                recs.append(rec)
-            okat = pd.DataFrame(recs).sort_values(f"Försäljning {YEARS[-1]} (kr)", ascending=False)
-            st.download_button(f"Ladda ner artiklar under \"{missing}\" som Excel ({len(okat)} st)",
-                               excel_bytes(okat, missing), f"GAP-{missing}-artiklar.xlsx", key="dl_okat",
-                               help=f"Artiklar som saknar värde i kategorifältet ({ds.get('categoryField', '')}) i Fortnox")
+    ac = st.columns([2, 2, 3])
+    cat_pick = ac[0].selectbox("Kategori", CATS, index=CATS.index(missing) if missing in CATS else 0,
+                               key="gap_artcat", label_visibility="collapsed")
+    arts_df = articles_in_category(ds["generated"], CATS.index(cat_pick), ds)
+    safe = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in cat_pick).strip() or "kategori"
+    ac[1].download_button(f"Ladda ner {len(arts_df)} artiklar som Excel", excel_bytes(arts_df, safe),
+                          f"GAP-artiklar-{safe}.xlsx", key="dl_artcat", disabled=len(arts_df) == 0,
+                          width="stretch")
+    ac[2].caption(f"Alla artiklar i vald kategori med artikelnummer, benämning, EAN, försäljning per år och "
+                  f"antal kunder. Kategorin kommer från fältet {ds.get('categoryField', '')} i Fortnox.")
 
 # ---------------------------------------------------------------- gap-lista
 with t2:
