@@ -1,19 +1,21 @@
 """Sida: GAP-analys – vilka produktkategorier varje kund köper, har slutat köpa eller aldrig köpt.
 
-Datan kommer från GAP-databasen (DATABASE_URL), som synkas mot Fortnox i bakgrunden av
-fortnox_core. Visas som tydliga tabeller i Excel-stil.
+Datan synkas från Fortnox av GitHub Actions i det privata repot Kundprognos-2026
+(.github/workflows/gap-sync.yml) och läses här från gap_report.json. Visas som tydliga
+tabeller i Excel-stil.
 """
 import io
 import os
-import sys
-import threading
+import base64
+import json
 
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import fortnox_core as fc  # noqa: E402
+DATA_REPO = "DeonJohansson/Kundprognos-2026"
+MISSING_CAT = "Okategoriserad"
 
 FILL = {"lost": "background-color:#f8d7d3;color:#8a1c12", "never": "background-color:#eef1f6;color:#8a93a3",
         "down": "background-color:#fbe9c6", "new": "background-color:#d6efe0", "grow": "background-color:#e3f3e8",
@@ -21,91 +23,47 @@ FILL = {"lost": "background-color:#f8d7d3;color:#8a1c12", "never": "background-c
 STATUS_TXT = {"lost": "Tappad", "down": "Minskar", "never": "Aldrig köpt", "new": "Ny i år", "grow": "Växer", "ok": "Stabil"}
 
 
-# ---------------------------------------------------------------- databas och synk
-if not os.environ.get("DATABASE_URL"):
-    st.title("GAP-analys")
-    st.error("GAP-analysens databas är inte inlagd. Lägg till `DATABASE_URL` (samma som i den gamla "
-             "GAP-appen) under appens **Settings → Secrets** på Streamlit.")
-    st.stop()
+# ---------------------------------------------------------------- data från det privata repot
+def _gh(path, raw=True):
+    token = st.secrets.get("GITHUB_TOKEN")
+    if not token:                     # lokalt testläge: läs filen bredvid appen
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), path)
+        if os.path.exists(p):
+            return open(p, encoding="utf-8").read()
+        st.error("GITHUB_TOKEN saknas i appens Secrets.")
+        st.stop()
+    r = requests.get(f"https://api.github.com/repos/{DATA_REPO}/contents/{path}", timeout=60, headers={
+        "Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28",
+        "Accept": "application/vnd.github.raw+json" if raw else "application/vnd.github+json"})
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        st.error(f"Kunde inte hämta {path} från GitHub ({r.status_code}).")
+        st.stop()
+    return r.text
 
 
-@st.cache_resource
-def db_conn():
-    return fc.DB(autocommit=True)
-
-
-def _db_error(e):
-    import re as _re
-    msg = _re.sub(r"postgres(ql)?://\S+", "postgresql://…", str(e)).strip().splitlines()
-    msg = msg[0] if msg else type(e).__name__
-    st.title("GAP-analys")
-    st.error("**GAP-analysen når inte sin databas (Neon) just nu.** Övriga sidor fungerar som vanligt.")
-    low = msg.lower()
-    if "quota" in low or "compute time" in low or "exceeded" in low:
-        st.info("Neon säger att databasens gratiskvot är slut för månaden. Logga in på console.neon.tech och "
-                "kontrollera **Usage** – kvoten nollställs vid månadsskiftet, eller uppgradera planen.")
-    elif "password" in low or "authentication" in low:
-        st.info("Neon nekade inloggningen. Kontrollera att `DATABASE_URL` under `[gap]` i appens Secrets "
-                "är samma som connection string i Neon (lösenordet kan ha bytts).")
-    elif "timeout" in low or "timed out" in low or "could not connect" in low or "connection" in low:
-        st.info("Databasen svarade inte i tid. Neon väcker databasen vid första besöket efter en paus – "
-                "vänta en halv minut och klicka **Försök igen**.")
-    st.caption(f"Tekniskt felmeddelande: {msg}")
-    if st.button("Försök igen", type="primary"):
-        db_conn.clear()
-        st.rerun()
-    st.stop()
-
-
-def db():
-    try:
-        con = db_conn()
-        try:
-            con.execute("SELECT 1").fetchone()
-        except Exception:
-            db_conn.clear()
-            con = db_conn()
-        return con
-    except Exception as e:
-        db_conn.clear()
-        _db_error(e)
-
-
-D = db()
-
-
-def start_sync_if_stale():
-    """Startar en bakgrundssynk mot Fortnox när någon öppnar sidan och datan är äldre än en timme.
-    Ingen ständig loop – då kan Neon-databasen somna mellan besöken och sparar kvot."""
-    if st.session_state.get("gap_sync_started"):
-        return
-    st.session_state["gap_sync_started"] = True
-
-    def run():
-        try:
-            fc.sync_if_stale(60)
-        except Exception as e:
-            print("GAP-synkfel:", e, flush=True)
-
-    threading.Thread(target=run, daemon=True).start()
-
-
-@st.cache_data(ttl=60, show_spinner="Hämtar GAP-data …")
+@st.cache_data(ttl=900, show_spinner="Hämtar GAP-data …")
 def load_ds():
-    return fc.load_report(D)
+    raw = _gh("gap_report.json")
+    return json.loads(raw) if raw else None
 
 
-s = fc.load_settings(D)
-if not (s["client_id"] and s["client_secret"] and s["tenant_id"]):
-    st.title("GAP-analys")
-    st.warning("Fortnox-kopplingen för GAP-analysen saknas. Lägg in `FORTNOX_CLIENT_ID` och "
-               "`FORTNOX_CLIENT_SECRET` från den gamla GAP-appen under **Settings → Secrets**.")
-    st.stop()
-start_sync_if_stale()
+@st.cache_data(ttl=300, show_spinner=False)
+def load_status():
+    raw = _gh("gap_status.json")
+    return json.loads(raw) if raw else {}
+
+
 ds = load_ds()
+status = load_status()
 if not ds:
     st.title("GAP-analys")
-    st.info("Ingen GAP-rapport finns ännu. Första hämtningen från Fortnox pågår – ladda om sidan om en stund.")
+    if status and not status.get("ok"):
+        st.error(f"Synken från Fortnox misslyckades: {status.get('error', 'okänt fel')}")
+    else:
+        st.info("GAP-rapporten byggs just nu från Fortnox (första gången hämtas fyra års fakturor och det kan "
+                "ta upp till ett par timmar). Ladda om sidan senare.")
     st.stop()
 
 
@@ -285,7 +243,7 @@ with t1:
         return df.sort_values(f"Försäljning {_ds['years'][-1]} (kr)", ascending=False) if len(df) else df
 
     st.markdown("**Artiklar i en kategori**")
-    missing = fc.load_settings(D)["kategori"].get("saknas", "Okategoriserad")
+    missing = MISSING_CAT
     ac = st.columns([2, 2, 3])
     cat_pick = ac[0].selectbox("Kategori", CATS, index=CATS.index(missing) if missing in CATS else 0,
                                key="gap_artcat", label_visibility="collapsed")
@@ -351,20 +309,9 @@ with t3:
                        f"GAP-kategorier-{yr}.xlsx", key="dl_cat")
 
 # ---------------------------------------------------------------- fot
-c1, c2, _ = st.columns([1.2, 1.2, 4])
+c1, c2 = st.columns([1.2, 5])
 c1.toggle("Visa inaktiva kunder", key="gap_inactive")
-if c2.button("Hämta senaste från Fortnox nu"):
-    with st.spinner("Hämtar nytt från Fortnox …"):
-        try:
-            ran = fc.sync()
-        except Exception as e:
-            ran = None
-            st.toast(f"Kunde inte nå Fortnox just nu – visar senaste data. ({e})")
-    if ran:
-        load_ds.clear()
-        arrays.clear()
-        st.rerun()
-    elif ran is False:
-        st.toast("En hämtning pågår redan – nya siffror kommer inom några minuter.")
-if D.meta_get("sync_error"):
-    st.caption(f"⚠️ Senaste synken misslyckades: {D.meta_get('sync_error')}. Appen försöker igen automatiskt.")
+c2.caption("Synkas automatiskt från Fortnox varannan timme på vardagar (en gång per dag på helger).")
+if status and not status.get("ok"):
+    st.caption(f"⚠️ Senaste synken misslyckades ({status.get('at', '')[:16].replace('T', ' ')} UTC): "
+               f"{status.get('error', '')}. Rapporten visar senaste lyckade data.")

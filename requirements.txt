@@ -3,4 +3,3 @@ pandas
 numpy
 openpyxl
 requests
-psycopg[binary]>=3.1

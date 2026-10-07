@@ -5,7 +5,7 @@ En Streamlit-app med fyra sidor, ett gemensamt lösenord och en meny i sidofält
 | Sida | Kod | Data |
 |---|---|---|
 | Kundprognos 2026 | `views/kundprognos.py` | privata repot Kundprognos-2026 (synkas från Fortnox av GitHub Actions) |
-| GAP-analys | `views/gap_analys.py` + `fortnox_core.py` | GAP-databasen (Neon), synkas mot Fortnox i bakgrunden |
+| GAP-analys | `views/gap_analys.py` | `gap_report.json` i Kundprognos-2026 (synkas från Fortnox av GitHub Actions) |
 | Fortnox-dashboard | `views/dashboard_fortnox.py` | Fortnox direkt |
 | Salesforce | `views/dashboard_salesforce.py` | Salesforce direkt |
 
@@ -14,11 +14,6 @@ Koden innehåller ingen kunddata och inga nycklar. Allt hemligt ligger i appens 
 ```toml
 APP_PASSWORD = "…"
 GITHUB_TOKEN = "github_pat_…"        # Kundprognos-2026, Contents: Read and write
-
-[gap]
-DATABASE_URL = "postgresql://…"
-FORTNOX_CLIENT_ID = "…"
-FORTNOX_CLIENT_SECRET = "…"
 
 [dashboard]
 FORTNOX_CLIENT_ID = "…"

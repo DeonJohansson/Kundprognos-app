@@ -2,19 +2,14 @@
 
 Sidor:
     Kundprognos 2026  – views/kundprognos.py  (data från det privata repot Kundprognos-2026)
-    GAP-analys        – views/gap_analys.py   (data från GAP-databasen, synkas mot Fortnox)
+    GAP-analys        – views/gap_analys.py   (gap_report.json i Kundprognos-2026, synkas av GitHub Actions)
 
     Fortnox-dashboard – views/dashboard_fortnox.py
     Salesforce        – views/dashboard_salesforce.py
 
 Streamlit Secrets (TOML):
     APP_PASSWORD = "..."          # lösenord för hela appen
-    GITHUB_TOKEN = "..."          # Kundprognos: läs/skriv-nyckel till Kundprognos-2026
-
-    [gap]                         # GAP-analysen
-    DATABASE_URL = "postgresql://..."
-    FORTNOX_CLIENT_ID = "..."
-    FORTNOX_CLIENT_SECRET = "..."
+    GITHUB_TOKEN = "..."          # läs/skriv-nyckel till Kundprognos-2026 (Kundprognos och GAP-analys)
 
     [dashboard]                   # Fortnox-dashboard och Salesforce (samma värden som i gamla optinord-dashboard)
     FORTNOX_CLIENT_ID = "..."
@@ -27,15 +22,9 @@ import streamlit as st
 
 st.set_page_config(page_title="Optinord rapporter", page_icon="📊", layout="wide")
 
-# Secrets -> miljövariabler. GAP-analysens kärna läser sina nycklar från miljön, så
-# [gap]-sektionen läggs in där. Övriga sidor läser st.secrets direkt.
 try:
-    for k, v in st.secrets.items():
-        if isinstance(v, (str, int, float)) and k in ("APP_PASSWORD",):
-            os.environ.setdefault(k, str(v))
-    if "gap" in st.secrets:
-        for k, v in st.secrets["gap"].items():
-            os.environ[k] = str(v)
+    if "APP_PASSWORD" in st.secrets:
+        os.environ.setdefault("APP_PASSWORD", str(st.secrets["APP_PASSWORD"]))
 except Exception:
     pass
 
