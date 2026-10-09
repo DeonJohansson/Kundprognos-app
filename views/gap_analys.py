@@ -179,7 +179,10 @@ tot, ptot = cur[idx].sum(), prev[idx].sum()
 buyers = int((cur[idx].sum(axis=1) > 0).sum())
 cats_bought = int((cur[idx] > 0).sum())
 lost_cnt = int((ST[idx] == "lost").sum())
-lost_val = float(prev[idx][ST[idx] == "lost"].sum())
+lost_mask = (ST[idx] == "lost") & (prev[idx] > 0)
+lost_val = float(prev[idx][lost_mask].sum())
+down_mask = ST[idx] == "down"
+down_val = float((prev[idx] - cur[idx])[down_mask].sum())
 d = pct(tot, ptot)
 per = "jan–" + ds["today"][8:10].lstrip("0") + "/" + ds["today"][5:7].lstrip("0") if mode == "Samma period" else "helår"
 k = st.columns(4)
@@ -190,6 +193,16 @@ k[2].metric("Tappade kategorier", f"{lost_cnt:,}".replace(",", " "),
             help=f"{short(lost_val)} köptes i dessa kategorier {yr - 1}")
 k[3].metric("Kategoritäckning", f"{(cats_bought / (buyers * len(CATS)) * 100 if buyers else 0):.0f} %",
             help="Andel av möjliga kund × kategori med köp")
+k2 = st.columns(4)
+k2[0].metric(f"Tappat {yr} mot {yr - 1}", kr(-lost_val) if lost_val else "0 kr",
+             f"{int(lost_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off",
+             help=f"Det kunderna köpte för {yr - 1} ({per}) i kategorier där de inte har köpt något alls {yr}.")
+k2[1].metric(f"Minskat {yr} mot {yr - 1}", kr(-down_val) if down_val else "0 kr",
+             f"{int(down_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off",
+             help=f"Hur mycket mindre kunderna köpt {yr} än {yr - 1} ({per}) i kategorier som minskat mer än 30 % "
+                  "(status Minskar). Tappade kategorier räknas inte här.")
+k2[2].metric(f"Tappat + minskat", kr(-(lost_val + down_val)) if lost_val + down_val else "0 kr",
+             help="Summan av de två till vänster.")
 
 t1, t2, t3 = st.tabs(["Matris", "Gap-lista", "Kategorier"])
 
