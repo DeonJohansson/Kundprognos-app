@@ -85,10 +85,9 @@ FULL, YTD, CUST = arrays(ds["generated"], ds)
 YEARS, CATS = ds["years"], ds["categories"]
 
 
-def status_matrix(V, yi):
+def status_matrix(V, yi, p1):
     v = V[:, :, yi]
     ever = (V[:, :, :yi] > 0).any(axis=2) if yi > 0 else np.zeros(v.shape, bool)
-    p1 = V[:, :, yi - 1] if yi > 0 else np.zeros(v.shape)
     st_ = np.full(v.shape, "ok", dtype=object)
     st_[(v <= 0) & ever] = "lost"
     st_[(v <= 0) & ~ever] = "never"
@@ -148,9 +147,12 @@ show_inactive = bool(st.session_state.get("gap_inactive", False))
 
 V = YTD if mode == "Samma period" else FULL
 yi = YEARS.index(yr)
-ST = status_matrix(V, yi)
 cur = V[:, :, yi]
-prev = V[:, :, yi - 1] if yi > 0 else np.zeros(cur.shape)
+# Innevarande år är inte slut: jämför alltid mot samma period förra året (jan – dagens datum),
+# även i läget "Hela året", annars ser det ut som att allt har minskat.
+running = yr == int(ds["today"][:4])
+prev = (YTD if running else V)[:, :, yi - 1] if yi > 0 else np.zeros(cur.shape)
+ST = status_matrix(V, yi, prev)
 
 base = CUST.copy()
 base["Totalt"] = cur.sum(axis=1)
@@ -184,9 +186,11 @@ lost_val = float(prev[idx][lost_mask].sum())
 down_mask = ST[idx] == "down"
 down_val = float((prev[idx] - cur[idx])[down_mask].sum())
 d = pct(tot, ptot)
-per = "jan–" + ds["today"][8:10].lstrip("0") + "/" + ds["today"][5:7].lstrip("0") if mode == "Samma period" else "helår"
+per_ytd = "jan–" + ds["today"][8:10].lstrip("0") + "/" + ds["today"][5:7].lstrip("0")
+per = per_ytd if mode == "Samma period" else "helår"
+per_cmp = per_ytd if (mode == "Samma period" or running) else "helår"
 k = st.columns(4)
-k[0].metric(f"Försäljning {yr} ({per})", short(tot), None if d is None else f"{d:+d} % mot {yr - 1}")
+k[0].metric(f"Försäljning {yr} ({per})", short(tot), None if d is None else f"{d:+d} % mot {yr - 1} ({per_cmp})")
 k[1].metric("Köpande kunder", f"{buyers:,}".replace(",", " "),
             help=f"I snitt {cats_bought / buyers if buyers else 0:.1f} av {len(CATS)} kategorier per kund")
 k[2].metric("Tappade kategorier", f"{lost_cnt:,}".replace(",", " "),
@@ -194,15 +198,19 @@ k[2].metric("Tappade kategorier", f"{lost_cnt:,}".replace(",", " "),
 k[3].metric("Kategoritäckning", f"{(cats_bought / (buyers * len(CATS)) * 100 if buyers else 0):.0f} %",
             help="Andel av möjliga kund × kategori med köp")
 k2 = st.columns(4)
-k2[0].metric(f"Tappat {yr} mot {yr - 1}", kr(-lost_val) if lost_val else "0 kr",
+k2[0].metric(f"Tappat {yr} mot {yr - 1} ({per_cmp})", kr(-lost_val) if lost_val else "0 kr",
              f"{int(lost_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off",
-             help=f"Det kunderna köpte för {yr - 1} ({per}) i kategorier där de inte har köpt något alls {yr}.")
-k2[1].metric(f"Minskat {yr} mot {yr - 1}", kr(-down_val) if down_val else "0 kr",
+             help=f"Det kunderna köpte för {yr - 1} ({per_cmp}) i kategorier där de inte har köpt något alls {yr}.")
+k2[1].metric(f"Minskat {yr} mot {yr - 1} ({per_cmp})", kr(-down_val) if down_val else "0 kr",
              f"{int(down_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off",
-             help=f"Hur mycket mindre kunderna köpt {yr} än {yr - 1} ({per}) i kategorier som minskat mer än 30 % "
+             help=f"Hur mycket mindre kunderna köpt {yr} än {yr - 1} ({per_cmp}) i kategorier som minskat mer än 30 % "
                   "(status Minskar). Tappade kategorier räknas inte här.")
 k2[2].metric(f"Tappat + minskat", kr(-(lost_val + down_val)) if lost_val + down_val else "0 kr",
              help="Summan av de två till vänster.")
+
+if running and mode == "Hela året":
+    st.caption(f"ℹ️ {yr} pågår fortfarande, så jämförelser mot {yr - 1} görs mot samma period ({per_ytd}) – "
+               "inte mot hela förra året.")
 
 t1, t2, t3 = st.tabs(["Matris", "Gap-lista", "Kategorier"])
 
