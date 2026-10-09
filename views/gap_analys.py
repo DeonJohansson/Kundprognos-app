@@ -128,9 +128,93 @@ def excel_bytes(df, sheet):
     return buf.getvalue()
 
 
+# ---------------------------------------------------------------- kolumnval (standard sparas i datarepot)
+SET_FILE = "gap_settings.json"
+
+
+def _put(path, text, sha, message):
+    token = st.secrets.get("GITHUB_TOKEN")
+    if not token:                     # lokalt testläge
+        open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), path), "w",
+             encoding="utf-8").write(text)
+        return True, None
+    body = {"message": message, "content": base64.b64encode(text.encode("utf-8")).decode()}
+    if sha:
+        body["sha"] = sha
+    r = requests.put(f"https://api.github.com/repos/{DATA_REPO}/contents/{path}", json=body, timeout=30, headers={
+        "Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"})
+    if r.status_code in (200, 201):
+        return True, None
+    if r.status_code in (409, 422):
+        return False, "Någon annan sparade samtidigt. Ladda om sidan och försök igen."
+    if r.status_code in (401, 403):
+        return False, "GitHub-nyckeln saknar skrivbehörighet (Contents: Read and write)."
+    return False, f"GitHub svarade {r.status_code}."
+
+
+def gap_settings():
+    if "gap_set" not in st.session_state:
+        if not st.secrets.get("GITHUB_TOKEN"):     # lokalt testläge
+            lp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), SET_FILE)
+            st.session_state["gap_set"] = (json.load(open(lp, encoding="utf-8")) if os.path.exists(lp) else {}, None)
+        else:
+            meta = _gh(SET_FILE, raw=False)
+            j = json.loads(meta) if meta else None
+            st.session_state["gap_set"] = ((json.loads(base64.b64decode(j["content"]).decode("utf-8")), j["sha"])
+                                           if j else ({}, None))
+    return st.session_state["gap_set"]
+
+
+def col_picker(tab, title, cols, fixed, yr):
+    """Popover för att välja kolumner i en tabell. Returnerar kolumnerna som ska visas.
+    Standard sparas som *dolda* kolumner, så nya kategorier syns automatiskt. Årtal sparas
+    som {år}/{fjol} så att valet gäller oavsett vilket år man tittar på."""
+    def sid(c):
+        return str(c).replace(str(yr), "{år}").replace(str(yr - 1), "{fjol}")
+
+    def label(i):
+        return i.replace("{år}", str(yr)).replace("{fjol}", str(yr - 1))
+
+    sett, sha = gap_settings()
+    hidden_default = set(sett.get("hidden_columns", {}).get(tab, []))
+    opts = [sid(c) for c in cols if c not in fixed]
+    key = f"gap_cols_{tab}"
+    if key not in st.session_state or set(st.session_state.get(key + "_opts", [])) != set(opts):
+        prev_sel = st.session_state.get(key)
+        known = set(st.session_state.get(key + "_opts", []))
+        st.session_state[key] = ([o for o in opts if o in prev_sel or o not in known] if prev_sel is not None
+                                 else [o for o in opts if o not in hidden_default])
+        st.session_state[key + "_opts"] = opts
+    with st.popover(f"Kolumner ({len(st.session_state[key]) + len(fixed)} av {len(cols)})"):
+        st.multiselect(f"Visa kolumner i {title}", opts, key=key, format_func=label,
+                       help=f"{', '.join(fixed)} visas alltid. Valet gäller direkt för dig.")
+        b1, b2 = st.columns(2)
+        if b1.button("Visa alla", key=key + "_all", width="stretch"):
+            st.session_state[key] = list(opts)
+            st.rerun()
+        if b2.button("Återställ standard", key=key + "_reset", width="stretch"):
+            st.session_state[key] = [o for o in opts if o not in hidden_default]
+            st.rerun()
+        st.divider()
+        st.caption(f"Spara de valda kolumnerna som standard i {title}. Alla som öppnar rapporten ser då dessa kolumner.")
+        if st.button("Spara som standard för alla", key=key + "_save", type="primary", width="stretch"):
+            hid = [o for o in opts if o not in st.session_state[key]]
+            new = {**sett, "hidden_columns": {**sett.get("hidden_columns", {}), tab: hid}}
+            ok, err = _put(SET_FILE, json.dumps(new, ensure_ascii=False, indent=1), sha,
+                           f"GAP-analys: standardkolumner i {title}")
+            st.session_state.pop("gap_set", None)
+            st.session_state["gap_flash"] = (ok, f"Standardkolumnerna i {title} är sparade." if ok else err)
+            st.rerun()
+    chosen = set(st.session_state[key])
+    return [c for c in cols if c in fixed or sid(c) in chosen]
+
+
 # ---------------------------------------------------------------- sidhuvud och filter
 h1, h2 = st.columns([3, 2])
 h1.title("GAP-analys")
+if "gap_flash" in st.session_state:
+    _ok, _msg = st.session_state.pop("gap_flash")
+    (st.success if _ok else st.error)(_msg)
 h2.markdown(f"<div style='text-align:right;padding-top:1.4rem;color:#5d6779'>🟢 Synkad mot Fortnox {ds['generated']}"
             f"<br><small>Köp per produktkategori ({ds.get('categoryField', '')}) · exkl. moms</small></div>",
             unsafe_allow_html=True)
@@ -230,6 +314,7 @@ with t1:
     if len(table) > 1500:
         st.info(f"Visar de 1 500 största av {len(table)} kunder – använd sök eller urval för att hitta fler, "
                 "eller ladda ner hela tabellen som Excel.")
+    mcols = col_picker("matris", "Matris", list(table.columns), ["Kund"], yr)
     shown = table.head(1500)
     colors = pd.DataFrame("", index=shown.index, columns=shown.columns)
     for c in CATS:
@@ -239,7 +324,7 @@ with t1:
     styler = shown.style.apply(lambda _: colors, axis=None).format(fmt)
     cfg = {"Kund": st.column_config.TextColumn("Kund", width="large", pinned=True),
            "Kundnr": st.column_config.TextColumn("Kundnr", width="small", pinned=True)}
-    st.dataframe(styler, hide_index=True, width="stretch", height=600, column_config=cfg)
+    st.dataframe(styler, hide_index=True, width="stretch", height=600, column_config=cfg, column_order=mcols)
     st.download_button("Ladda ner matrisen som Excel", excel_bytes(table, f"Matris {yr}"),
                        f"GAP-matris-{yr}.xlsx", key="dl_mat")
 
@@ -278,7 +363,11 @@ with t1:
 
 # ---------------------------------------------------------------- gap-lista
 with t2:
-    with_never = st.checkbox("Ta med kategorier som kunden aldrig köpt", value=False, key="gap_never")
+    gl = st.columns([4, 1.2])
+    with_never = gl[0].checkbox("Ta med kategorier som kunden aldrig köpt", value=False, key="gap_never")
+    with gl[1]:
+        gcols = col_picker("gaplista", "Gap-listan", ["Kundnr", "Kund", "Kategori", "Status", str(yr), str(yr - 1),
+                                                     "Snitt tidigare år", "Bästa år"], ["Kund"], yr)
     wanted = {"lost", "down"} | ({"never"} if with_never else set())
     rows = []
     sub_st, sub_cur = ST[idx], cur[idx]
@@ -303,7 +392,7 @@ with t2:
         gst = gs.style.apply(lambda col: col.map({"Tappad": FILL["lost"], "Minskar": FILL["down"],
                                                   "Aldrig köpt": FILL["never"]}).fillna(""), subset=["Status"]).format(
             {c: kr for c in [str(yr), str(yr - 1), "Snitt tidigare år", "Bästa år"]})
-        st.dataframe(gst, hide_index=True, width="stretch", height=600,
+        st.dataframe(gst, hide_index=True, width="stretch", height=600, column_order=gcols,
                      column_config={"Kund": st.column_config.TextColumn("Kund", width="large", pinned=True)})
         st.download_button("Ladda ner gap-listan som Excel", excel_bytes(g, f"Gap {yr}"), f"GAP-lista-{yr}.xlsx", key="dl_gap")
 
@@ -320,11 +409,12 @@ with t3:
                      "Tappade kunder": int((ST[idx, kk] == "lost").sum()),
                      "Aldrig köpt": int((ST[idx, kk] == "never").sum())})
     cdf = pd.DataFrame(crow).sort_values(f"Försäljning {yr}", ascending=False)
+    ccols = col_picker("kategorier", "Kategorier", list(cdf.columns), ["Kategori"], yr)
     cst = cdf.style.format({f"Försäljning {yr}": kr, f"Försäljning {yr - 1}": kr, "Förändring %": pct_txt,
                             "Penetration %": lambda v: f"{v:.0f} %"}).apply(
         lambda col: ["color:#1e7a46" if (v is not None and not pd.isna(v) and v >= 0) else "color:#b3261e" for v in col],
         subset=["Förändring %"])
-    st.dataframe(cst, hide_index=True, width="stretch", height=min(40 + 35 * len(cdf), 700),
+    st.dataframe(cst, hide_index=True, width="stretch", height=min(40 + 35 * len(cdf), 700), column_order=ccols,
                  column_config={"Kategori": st.column_config.TextColumn("Kategori", width="large", pinned=True)})
     st.download_button("Ladda ner kategorierna som Excel", excel_bytes(cdf, f"Kategorier {yr}"),
                        f"GAP-kategorier-{yr}.xlsx", key="dl_cat")
