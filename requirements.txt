@@ -1,4 +1,4 @@
-streamlit>=1.47
+streamlit>=1.55
 pandas
 numpy
 openpyxl

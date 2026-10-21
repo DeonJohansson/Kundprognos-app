@@ -284,10 +284,10 @@ k[3].metric("Kategoritäckning", f"{(cats_bought / (buyers * len(CATS)) * 100 if
             help="Andel av möjliga kund × kategori med köp")
 k2 = st.columns(4)
 k2[0].metric(f"Tappat {yr} mot {yr - 1} ({per_cmp})", kr(-lost_val) if lost_val else "0 kr",
-             f"{int(lost_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off",
+             f"{int(lost_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off", delta_arrow="off",
              help=f"Det kunderna köpte för {yr - 1} ({per_cmp}) i kategorier där de inte har köpt något alls {yr}.")
 k2[1].metric(f"Minskat {yr} mot {yr - 1} ({per_cmp})", kr(-down_val) if down_val else "0 kr",
-             f"{int(down_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off",
+             f"{int(down_mask.sum()):,} kund × kategori".replace(",", " "), delta_color="off", delta_arrow="off",
              help=f"Hur mycket mindre kunderna köpt {yr} än {yr - 1} ({per_cmp}) i kategorier som minskat mer än 30 % "
                   "(status Minskar). Tappade kategorier räknas inte här.")
 k2[2].metric(f"Tappat + minskat", kr(-(lost_val + down_val)) if lost_val + down_val else "0 kr",
