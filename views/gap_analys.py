@@ -4,7 +4,9 @@ Datan synkas från Fortnox av GitHub Actions i det privata repot Kundprognos-202
 (.github/workflows/gap-sync.yml) och läses här från gap_report.json. Visas som tydliga
 tabeller i Excel-stil.
 """
+import datetime as dt
 import io
+from zoneinfo import ZoneInfo
 import os
 import base64
 import json
@@ -53,6 +55,15 @@ def load_ds():
 def load_status():
     raw = _gh("gap_status.json")
     return json.loads(raw) if raw else {}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_tb():
+    if not st.secrets.get("GITHUB_TOKEN"):     # lokalt testläge
+        lp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tb.json")
+        return json.load(open(lp, encoding="utf-8")) if os.path.exists(lp) else None
+    raw = _gh("tb.json")
+    return json.loads(raw) if raw else None
 
 
 ds = load_ds()
@@ -297,7 +308,7 @@ if running and mode == "Hela året":
     st.caption(f"ℹ️ {yr} pågår fortfarande, så jämförelser mot {yr - 1} görs mot samma period ({per_ytd}) – "
                "inte mot hela förra året.")
 
-t1, t2, t3 = st.tabs(["Matris", "Gap-lista", "Kategorier"])
+t1, t2, t3, t4 = st.tabs(["Matris", "Gap-lista", "Kategorier", "TB%"])
 
 # ---------------------------------------------------------------- matris
 with t1:
@@ -425,6 +436,135 @@ with t3:
                  column_config={"Kategori": st.column_config.TextColumn("Kategori", width="large", pinned=True)})
     st.download_button("Ladda ner kategorierna som Excel", excel_bytes(cdf, f"Kategorier {yr}"),
                        f"GAP-kategorier-{yr}.xlsx", key="dl_cat")
+
+# ---------------------------------------------------------------- TB% per produktkategori
+MON_SV = ["Januari", "Februari", "Mars", "April", "Maj", "Juni", "Juli", "Augusti", "September", "Oktober",
+          "November", "December"]
+
+
+def pct2(v):
+    return "–" if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v * 100:,.2f} %".replace(",", " ").replace(".", ",")
+
+
+def pe(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return "–"
+    return f"{v * 100:+.2f}".replace(".", ",") + " p.e."
+
+
+def tb_color(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return ""
+    return "color:#1e7a46" if v >= 0.35 else ("color:#9a6400" if v >= 0.20 else "color:#b3261e")
+
+
+with t4:
+    tbd = load_tb()     # tb.json: {"y2026": {"year", "updatedAt", "source", "cats": {kat: {"net": [12], "tb": [12]}}}}
+    TBY = {int(v.get("year") or k[1:]): v for k, v in (tbd or {}).items() if isinstance(v, dict) and v.get("cats")}
+    if not TBY:
+        st.info("Ingen TB-data ännu. Den fylls i vid nästa synk från Fortnox.")
+    else:
+        today = dt.date.fromisoformat(ds["today"])
+        tyears = sorted(TBY, reverse=True)
+        tc = st.columns([0.8, 1.6, 3.2, 1.4], vertical_alignment="center")
+        ty = tc[0].selectbox("År", tyears, key="tb_year", label_visibility="collapsed")
+        running_tb = ty == today.year
+        per_opts = ["all"] + list(range(12))
+        per_lbl = {"all": f"Helår {ty}", **{i: f"{MON_SV[i]} {ty}" for i in range(12)}}
+        if st.session_state.get("tb_per") not in per_opts or st.session_state.get("tb_year_prev") != ty:
+            st.session_state["tb_per"] = today.month - 1 if running_tb else "all"   # förval: innevarande månad
+            st.session_state["tb_year_prev"] = ty
+        tp = tc[1].selectbox("Period", per_opts, format_func=lambda o: per_lbl[o], key="tb_per",
+                             label_visibility="collapsed")
+        tc[2].caption("TB% = täckningsbidrag / försäljning exkl. moms (Fortnox TB%). Jämförs med samma period "
+                      "föregående år. Gäller alla kunder – sök och urval ovan påverkar inte fliken.")
+
+        def tb_vals(d_, per):
+            """(försäljning, TB) för en kategori och ett år under vald period."""
+            n_, t_ = d_.get("net") or [0.0] * 12, d_.get("tb") or [0.0] * 12
+            return (sum(n_), sum(t_)) if per == "all" else (n_[per], t_[per])
+
+        cur_cats, prev_cats = TBY[ty]["cats"], (TBY.get(ty - 1) or {}).get("cats", {})
+        rows_tb = []
+        for cat in cur_cats:
+            c_, p_ = cur_cats.get(cat, {}), prev_cats.get(cat, {})
+            net, tbv = tb_vals(c_, tp)
+            pnet, ptb = tb_vals(p_, tp)
+            if abs(net) < 0.5 and abs(tbv) < 0.5:
+                continue
+            rows_tb.append({"Produktkategori": cat, "Försäljning (kr)": net, "TB (kr)": tbv,
+                            "TB%": tbv / net if abs(net) >= 0.5 else None,
+                            "_pnet": pnet, "_ptb": ptb,
+                            "TB% föreg. år": ptb / pnet if abs(pnet) >= 0.5 else None})
+        tdf = pd.DataFrame(rows_tb, columns=["Produktkategori", "Försäljning (kr)", "TB (kr)", "TB%", "_pnet", "_ptb",
+                                             "TB% föreg. år"])
+        tot_net, tot_tb = tdf["Försäljning (kr)"].sum(), tdf["TB (kr)"].sum()
+        p_net, p_tb = tdf["_pnet"].sum(), tdf["_ptb"].sum()
+        tot_pct = tot_tb / tot_net if abs(tot_net) >= 0.5 else None
+        p_pct = p_tb / p_net if abs(p_net) >= 0.5 else None
+        tdf["Andel av TB"] = tdf["TB (kr)"] / tot_tb if abs(tot_tb) >= 0.5 else None
+        tdf["Förändring"] = tdf["TB%"] - tdf["TB% föreg. år"]
+        tdf = tdf.drop(columns=["_pnet", "_ptb"]).sort_values("Försäljning (kr)", ascending=False).reset_index(drop=True)
+        tdf = tdf[["Produktkategori", "Försäljning (kr)", "TB (kr)", "TB%", "Andel av TB", "TB% föreg. år", "Förändring"]]
+
+        ranked = tdf[(tdf["Försäljning (kr)"] > 0) & tdf["TB%"].notna()]
+        best = ranked.loc[ranked["TB%"].astype(float).idxmax()] if len(ranked) else None
+        worst = ranked.loc[ranked["TB%"].astype(float).idxmin()] if len(ranked) else None
+        kk = st.columns(5)
+        kk[0].metric("Försäljning", short(tot_net), per_lbl[tp], delta_color="off", delta_arrow="off")
+        kk[1].metric("Täckningsbidrag", short(tot_tb), "TB i kr", delta_color="off", delta_arrow="off")
+        kk[2].metric("TB%", pct2(tot_pct),
+                     None if tot_pct is None or p_pct is None else f"{pe(tot_pct - p_pct)} mot {ty - 1} ({pct2(p_pct)})",
+                     help="Förändringen är i procentenheter mot samma period föregående år.")
+        kk[3].metric("Högst TB%", best["Produktkategori"] if best is not None else "–",
+                     pct2(best["TB%"]) if best is not None else None, delta_color="off", delta_arrow="off")
+        kk[4].metric("Lägst TB%", worst["Produktkategori"] if worst is not None else "–",
+                     pct2(worst["TB%"]) if worst is not None else None, delta_color="off", delta_arrow="off")
+
+        summa = pd.DataFrame([{"Produktkategori": f"Summa ({len(tdf)} kategorier)", "Försäljning (kr)": tot_net,
+                               "TB (kr)": tot_tb, "TB%": tot_pct, "Andel av TB": 1.0 if len(tdf) else None,
+                               "TB% föreg. år": p_pct,
+                               "Förändring": (tot_pct - p_pct) if tot_pct is not None and p_pct is not None else None}])
+        show_tb = pd.concat([tdf, summa], ignore_index=True)
+        with tc[3]:
+            tbcols = col_picker("tb", "TB%", list(show_tb.columns), ["Produktkategori"], ty)
+        last = len(show_tb) - 1
+
+        def tb_style(df):
+            out = pd.DataFrame("", index=df.index, columns=df.columns)
+            for c in ("TB%", "TB% föreg. år"):
+                out[c] = df[c].map(tb_color)
+            out["Förändring"] = df["Förändring"].map(lambda v: "" if v is None or pd.isna(v) else
+                                                     ("color:#1e7a46" if v > 0.00005 else ("color:#b3261e" if v < -0.00005 else "")))
+            for c in ("Försäljning (kr)", "TB (kr)"):
+                out[c] = df[c].map(lambda v: "color:#b3261e" if v is not None and not pd.isna(v) and v < 0 else "")
+            out.iloc[last] = out.iloc[last] + ";font-weight:700;background-color:#d9e1f2"
+            return out
+
+        tst = show_tb.style.apply(tb_style, axis=None).format(
+            {"Försäljning (kr)": lambda v: f"{v:,.0f}".replace(",", " "),
+             "TB (kr)": lambda v: f"{v:,.0f}".replace(",", " ").replace("-", "−"),
+             "TB%": pct2, "Andel av TB": pct2, "TB% föreg. år": pct2, "Förändring": pe})
+        st.dataframe(tst, hide_index=True, width="stretch", column_order=tbcols,
+                     height=min(40 + 35 * len(show_tb), 700),
+                     column_config={"Produktkategori": st.column_config.TextColumn("Produktkategori", width="large",
+                                                                                   pinned=True)})
+        xl = show_tb.copy()
+        for c in ("TB%", "Andel av TB", "TB% föreg. år", "Förändring"):
+            xl[c] = xl[c].map(lambda v: None if v is None or pd.isna(v) else round(v * 100, 2))
+        xl = xl.rename(columns={"TB%": "TB %", "Andel av TB": "Andel av TB %", "TB% föreg. år": "TB % föreg. år",
+                                "Förändring": "Förändring (p.e.)"})
+        xl["Försäljning (kr)"] = xl["Försäljning (kr)"].round(0)
+        xl["TB (kr)"] = xl["TB (kr)"].round(0)
+        per_file = "Helar" if tp == "all" else f"{tp + 1:02d}"
+        st.download_button("Ladda ner TB% som Excel", excel_bytes(xl, f"TB {ty}"), f"TB_per_kategori_{ty}_{per_file}.xlsx",
+                           key="dl_tb")
+        upd = TBY[ty].get("updatedAt", "")
+        try:
+            upd = dt.datetime.fromisoformat(upd).astimezone(ZoneInfo("Europe/Stockholm")).strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            pass
+        st.caption(f"Källa: {TBY[ty].get('source', 'Fortnox')} · uppdaterad {upd}")
 
 # ---------------------------------------------------------------- fot
 c1, c2 = st.columns([1.2, 5])
