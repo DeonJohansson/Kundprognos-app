@@ -185,7 +185,8 @@ def col_picker(tab, title, cols, fixed, yr):
         st.session_state[key] = ([o for o in opts if o in prev_sel or o not in known] if prev_sel is not None
                                  else [o for o in opts if o not in hidden_default])
         st.session_state[key + "_opts"] = opts
-    with st.popover(f"Kolumner ({len(st.session_state[key]) + len(fixed)} av {len(cols)})"):
+    with st.popover(f"Välj kolumner ({len(st.session_state[key]) + len(fixed)} av {len(cols)})", icon="⚙️",
+                    width="stretch"):
         st.multiselect(f"Visa kolumner i {title}", opts, key=key, format_func=label,
                        help=f"{', '.join(fixed)} visas alltid. Valet gäller direkt för dig.")
         b1, b2 = st.columns(2)
@@ -300,8 +301,12 @@ t1, t2, t3 = st.tabs(["Matris", "Gap-lista", "Kategorier"])
 
 # ---------------------------------------------------------------- matris
 with t1:
-    st.caption("Belopp per kund och kategori för valt år. "
-               "🟥 Tappad (köpte tidigare, inget i år) · ⬜ Aldrig köpt · 🟧 Minskar mer än 30 % · 🟩 Ny i år")
+    mr = st.columns([5, 1.4], vertical_alignment="center")
+    mr[0].caption("Belopp per kund och kategori för valt år. "
+                  "🟥 Tappad (köpte tidigare, inget i år) · ⬜ Aldrig köpt · 🟧 Minskar mer än 30 % · 🟩 Ny i år")
+    with mr[1]:
+        mcols = col_picker("matris", "Matris", ["Kundnr", "Kund", "Ort", f"Totalt {yr}", "Förändring %", "Gap", *CATS],
+                           ["Kund"], yr)
     sub = base.iloc[idx]
     mat = pd.DataFrame(cur[idx], columns=CATS)
     sts = pd.DataFrame(ST[idx], columns=CATS)
@@ -314,7 +319,6 @@ with t1:
     if len(table) > 1500:
         st.info(f"Visar de 1 500 största av {len(table)} kunder – använd sök eller urval för att hitta fler, "
                 "eller ladda ner hela tabellen som Excel.")
-    mcols = col_picker("matris", "Matris", list(table.columns), ["Kund"], yr)
     shown = table.head(1500)
     colors = pd.DataFrame("", index=shown.index, columns=shown.columns)
     for c in CATS:
@@ -363,7 +367,7 @@ with t1:
 
 # ---------------------------------------------------------------- gap-lista
 with t2:
-    gl = st.columns([4, 1.2])
+    gl = st.columns([5, 1.4], vertical_alignment="center")
     with_never = gl[0].checkbox("Ta med kategorier som kunden aldrig köpt", value=False, key="gap_never")
     with gl[1]:
         gcols = col_picker("gaplista", "Gap-listan", ["Kundnr", "Kund", "Kategori", "Status", str(yr), str(yr - 1),
@@ -409,7 +413,10 @@ with t3:
                      "Tappade kunder": int((ST[idx, kk] == "lost").sum()),
                      "Aldrig köpt": int((ST[idx, kk] == "never").sum())})
     cdf = pd.DataFrame(crow).sort_values(f"Försäljning {yr}", ascending=False)
-    ccols = col_picker("kategorier", "Kategorier", list(cdf.columns), ["Kategori"], yr)
+    cr = st.columns([5, 1.4], vertical_alignment="center")
+    cr[0].caption("Försäljning, köpande kunder och tappade kunder per kategori för valt urval.")
+    with cr[1]:
+        ccols = col_picker("kategorier", "Kategorier", list(cdf.columns), ["Kategori"], yr)
     cst = cdf.style.format({f"Försäljning {yr}": kr, f"Försäljning {yr - 1}": kr, "Förändring %": pct_txt,
                             "Penetration %": lambda v: f"{v:.0f} %"}).apply(
         lambda col: ["color:#1e7a46" if (v is not None and not pd.isna(v) and v >= 0) else "color:#b3261e" for v in col],
